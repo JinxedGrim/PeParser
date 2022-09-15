@@ -6,13 +6,13 @@ int main()
     std::cout << "PE Parser By JinxedGrim\n" << std::endl;
 
     uintptr_t IMPORTVA = 0;
-    char FileName[MAX_PATH] = ""; // Path To PE
+    std::string Path = "";
 
     std::cout << "Enter PE Path: ";
 
-    std::cin >> FileName;
+    std::getline(std::cin, Path);
 
-    PeParser PeParse = PeParser(FileName);
+    PeParser PeParse = PeParser(Path);
 
     if (PeParse.InitHeaders())
     {

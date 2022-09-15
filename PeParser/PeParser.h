@@ -2,7 +2,7 @@
 #include <iostream>
 #include <windows.h>
 #include <vector>
-
+#include <string>
 
 class PeParser
 {
@@ -12,7 +12,7 @@ public:
 
     }
 
-    PeParser(char* Path)
+    PeParser(std::string Path)
     {
         if (this->MapFileToMemory(Path, false, true))
         {
@@ -113,9 +113,9 @@ public:
         }
     }
 
-    bool MapFileToMemory(char Path[MAX_PATH], bool LogSuccess = false, bool LogError = true)
+    bool MapFileToMemory(std::string Path, bool LogSuccess = false, bool LogError = true)
     {
-        this->FileHnd = CreateFileA(Path, GENERIC_WRITE | GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+        this->FileHnd = CreateFileA(Path.c_str(), GENERIC_WRITE | GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
         if (FileHnd == INVALID_HANDLE_VALUE)
         {
             if (LogError)
@@ -346,9 +346,19 @@ public:
         {
             PIMAGE_IMPORT_BY_NAME PImport = this->GetImageINTFromThunk(FirstINTEntry);
 
-            if (!PImport)
+            if ((FirstINTEntry->u1.Ordinal & IMAGE_ORDINAL_FLAG))
+            {
+                FirstIATEntry++;
+                FirstINTEntry++;
                 continue;
+            }
 
+            if (!PImport)
+            {
+                FirstIATEntry++;
+                FirstINTEntry++;
+                continue;
+            }
 
             std::string Name = PSTR(PImport->Name);
 
@@ -376,11 +386,19 @@ public:
 
         while (FirstINTEntry->u1.Function != NULL)
         {
+            if ((FirstINTEntry->u1.Ordinal & IMAGE_ORDINAL_FLAG))
+            {
+                FirstINTEntry++;
+                continue;
+            }
+
             PIMAGE_IMPORT_BY_NAME PImport = this->GetImageINTFromThunk(FirstINTEntry);
 
             if (!PImport)
+            {
+                FirstINTEntry++;
                 continue;
-
+            }
 
             std::cout << "        Imported Function: [" << PImport->Hint << "] " << PSTR(PImport->Name) << " (0x" << std::hex << (uintptr_t)(FirstINTEntry->u1.Function) << ")" << std::endl;
             FirstINTEntry++;
@@ -424,8 +442,15 @@ public:
 
                     while (INTEntry->u1.Function != NULL)
                     {
+                        if ((INTEntry->u1.Ordinal & IMAGE_ORDINAL_FLAG))
+                        {
+                            INTEntry++;
+                            continue;
+                        }
+
                         PIMAGE_IMPORT_BY_NAME PImport = this->GetImageINTFromThunk(INTEntry);
-                        if ((!PImport) || (INTEntry->u1.Ordinal & IMAGE_ORDINAL_FLAG))
+                      
+                        if ((!PImport))
                         {
                             INTEntry++;
                             continue;
@@ -457,8 +482,15 @@ public:
 
                 while (INTEntry->u1.Function != NULL)
                 {
+                    if ((INTEntry->u1.Ordinal & IMAGE_ORDINAL_FLAG))
+                    {
+                        INTEntry++;
+                        continue;
+                    }
+
                     PIMAGE_IMPORT_BY_NAME PImport = this->GetImageINTFromThunk(INTEntry);
-                    if ((!PImport) || (INTEntry->u1.Ordinal & IMAGE_ORDINAL_FLAG))
+
+                    if ((!PImport))
                     {
                         INTEntry++;
                         continue;
