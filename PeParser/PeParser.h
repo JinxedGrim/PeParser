@@ -4,6 +4,9 @@
 #include <vector>
 #include <string>
 
+//#pragma warning(disable : 6387)
+//#pragma warning(disable : 6011)
+
 class PeParser
 {
 public:
@@ -45,7 +48,7 @@ public:
             {
                 if (SectionHeader->VirtualAddress <= RVA)
                 {
-                    if ((SectionHeader->VirtualAddress + SectionHeader->Misc.VirtualSize) > RVA)
+                    if (((uintptr_t)SectionHeader->VirtualAddress + (uintptr_t)SectionHeader->Misc.VirtualSize) > RVA)
                     {
                         RVA -= SectionHeader->VirtualAddress;
                         RVA += SectionHeader->PointerToRawData;
@@ -73,7 +76,7 @@ public:
             {
                 if (SectionHeader->PointerToRawData <= FileOffset)
                 {
-                    if ((SectionHeader->PointerToRawData + SectionHeader->SizeOfRawData) > FileOffset)
+                    if (((uintptr_t)SectionHeader->PointerToRawData + (uintptr_t)SectionHeader->SizeOfRawData) > FileOffset)
                     {
                         FileOffset -= SectionHeader->PointerToRawData;
                         FileOffset += SectionHeader->VirtualAddress;
@@ -165,7 +168,9 @@ public:
                 std::cout << "Successfully Created A File Mapping: " << this->FileMapHandle << std::endl;
         }
 
+        #pragma warning(disable : 6387) // value is checked before function call yet warning still appears
         this->FileBytes = (uintptr_t)MapViewOfFile(this->FileMapHandle, FILE_MAP_ALL_ACCESS, NULL, NULL, this->FileSz);
+        #pragma warning(default : 6387)
 
         if (!this->FileBytes)
         {
@@ -209,19 +214,15 @@ public:
         return false;
     }
 
-    void PrintAllSections()
+    uintptr_t GetSectionBase(PIMAGE_SECTION_HEADER SectionHeader)
     {
-        if (!this->NtHeader)
+        if (!SectionHeader)
         {
-            std::cout << "[!] NtHeader Not Initialized" << std::endl;
+            std::cout << "[!] Invalid Section Header" << std::endl;
+            return 0;
         }
-        this->SectionHeader = IMAGE_FIRST_SECTION(this->NtHeader);
-        std::cout << "Sections: ";
-        for (int i = 0; i < this->NtHeader->FileHeader.NumberOfSections; this->SectionHeader++, i++)
-        {
-            std::cout << SectionHeader->Name << ", ";
-        }
-        std::cout << std::endl;
+
+        return (uintptr_t)(this->FileBytes + SectionHeader->VirtualAddress);
     }
 
     uintptr_t GetOptionalDataDirectoryRVA(int DataType)
@@ -325,7 +326,7 @@ public:
         if (!PImportDescriptor)
         {
             std::cout << "[!] Invalid Import Descriptor Passed To: GetImportNameFromDescriptor" << std::endl;
-            return NULL;
+            return "";
         }
 
         uintptr_t NameOffset = RVA2FileOffset(PImportDescriptor->Name, this->NtHeader);
@@ -378,6 +379,46 @@ public:
             FirstIATEntry++;
         }
         return NULL;
+    }
+
+    PIMAGE_SECTION_HEADER GetSection(std::string SectionName)
+    {
+        if (!this->NtHeader)
+        {
+            std::cout << "[!] NtHeader Not Initialized" << std::endl;
+            return NULL;
+        }
+
+        this->SectionHeader = IMAGE_FIRST_SECTION(this->NtHeader);
+
+        for (int i = 0; i < this->NtHeader->FileHeader.NumberOfSections; this->SectionHeader++, i++)
+        {
+            std::string SecName = PSTR(this->SectionHeader->Name);
+            if (SecName == SectionName)
+            {
+                return this->SectionHeader;
+            }
+        }
+        return NULL;
+    }
+
+    void PrintAllSections()
+    {
+        if (!this->NtHeader)
+        {
+            std::cout << "[!] NtHeader Not Initialized" << std::endl;
+        }
+
+        #pragma warning(disable : 6011)
+        this->SectionHeader = IMAGE_FIRST_SECTION(this->NtHeader);
+        #pragma warning(default : 6011)
+
+        std::cout << "Sections: ";
+        for (int i = 0; i < this->NtHeader->FileHeader.NumberOfSections; this->SectionHeader++, i++)
+        {
+            std::cout << SectionHeader->Name << ", ";
+        }
+        std::cout << std::endl;
     }
 
     void PrintFunctionNames(PIMAGE_IMPORT_DESCRIPTOR Dll)
@@ -515,14 +556,112 @@ public:
         }
     }
 
+    void PrintSectionBytes(PIMAGE_SECTION_HEADER SectionHead)
+    {
+        if (!SectionHead)
+        {
+            std::cout << "[!] Invalid Section Header Passed" << std::endl;
+            return;
+        }
+
+        uintptr_t SectionBase = this->GetSectionBase(SectionHead);
+        uintptr_t SectionLength = SectionHead->Misc.VirtualSize;
+        int LineCount = 0;
+
+        if (!SectionBase || !SectionLength)
+        {
+            std::cout << "[!] Invalid Section Header Passed" << std::endl;
+            return;
+        }
+
+        std::cout << "Reading " << std::dec << SectionLength << " Bytes" << std::endl << std::endl;
+
+        printf("0x%IX: ", SectionBase - this->FileBytes);
+
+        for (uintptr_t i = 0; i < SectionLength; i++, LineCount++, SectionBase += 1)
+        {
+            if (LineCount == 32)
+            {
+                printf("\n0x%IX: ", SectionBase - this->FileBytes);
+                LineCount = 0;
+            }
+
+            printf("%02X ", *(unsigned char*)SectionBase); // unsigned because signed chars are the normal -127 to +127 ascii characters while unsigned gives range of 0 to 255
+        }
+
+        std::cout << std::endl;
+    }
+
+    uintptr_t FindPatternInSection(PBYTE SectionBase, DWORD SectionLength, PCHAR Pattern, PCHAR Mask)
+    {
+        SectionLength -= (DWORD)strlen(Mask);
+
+        for (DWORD i = 0; i < SectionLength; i++)
+        {
+            PCHAR Addr = (PCHAR)(SectionBase + i);
+
+            if (CheckPattern(Addr, Pattern, Mask))
+            {
+                return (uintptr_t)Addr;
+            }
+        }
+        return 0;
+    }
+
+    uintptr_t FindPatternImage(PCHAR Pattern, PCHAR Mask)
+    {
+        PIMAGE_SECTION_HEADER TextSection = this->GetSection(".text");
+        PIMAGE_SECTION_HEADER PageSection = this->GetSection("PAGE");
+
+        uintptr_t Result = 0x0;
+
+        if (TextSection)
+        {
+            Result = FindPatternInSection((PBYTE)(this->FileBytes + TextSection->VirtualAddress), TextSection->Misc.VirtualSize, Pattern, Mask);
+
+            if (Result)
+            {
+                return Result;
+            }
+        }
+
+        PageSection = GetSection("PAGE");
+
+        if (PageSection && Result)
+        {
+            std::cout << "Scanning Section: " << PageSection << std::endl;
+
+            Result = FindPatternInSection((PBYTE)(this->FileBytes + PageSection->VirtualAddress), PageSection->Misc.VirtualSize, Pattern, Mask);
+
+            if (Result)
+            {
+                return Result;
+            }
+        }
+
+        std::cout << "[!] Failed To Find Pattern" << std::endl;
+        return 0;
+    }
+
     PIMAGE_DOS_HEADER DosHeader = NULL;
     PIMAGE_NT_HEADERS NtHeader = NULL;
     PIMAGE_SECTION_HEADER SectionHeader = NULL;
-    uintptr_t FileBytes = NULL;
+    uintptr_t FileBytes = 0;
     DWORD FileSz = 0;
 private:
     HANDLE FileHnd = INVALID_HANDLE_VALUE;
     HANDLE FileMapHandle = INVALID_HANDLE_VALUE;
-
     bool IsFile = false;
+
+    bool CheckPattern(PCHAR SectionAddress, PCHAR Pattern, PCHAR Mask)
+    {
+        for (; *Mask != 0; ++SectionAddress, ++Pattern, ++Mask) // Iterate through SectionBase bytes && Pttern Characters && Mask Characters
+        {
+            if (*Mask == 'x' && *SectionAddress != *Pattern) // If Mask == 'x' we must have the same byte as Pattern in SectionBase
+            {
+                return true; // If the above isnt true pattern isnt here
+            }
+        }
+        return true;
+    }
 };
