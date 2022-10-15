@@ -7,30 +7,29 @@
 //#pragma warning(disable : 6387)
 //#pragma warning(disable : 6011)
 
+void LogError(std::string ErrMessage)
+{
+    std::cout << ErrMessage << std::endl;
+}
+
 class PeParser
 {
-public:
-    PeParser()
-    {
+private:
+    void (*ErrorCallBack)(std::string) = LogError;
+    HANDLE FileHnd = INVALID_HANDLE_VALUE;
+    HANDLE FileMapHandle = INVALID_HANDLE_VALUE;
+    bool IsFile = false;
 
-    }
-
-    PeParser(std::string Path)
+    bool CheckPattern(PCHAR SectionAddress, PCHAR Pattern, PCHAR Mask)
     {
-        if (this->MapFileToMemory(Path, false, true))
+        for (; *Mask != 0; ++SectionAddress, ++Pattern, ++Mask) // Iterate through SectionBase bytes && Pttern Characters && Mask Characters
         {
-            std::cout << "Successfully Mapped: " << Path << " To Memory" << std::endl;
-            this->IsFile = true;
+            if (*Mask == 'x' && *SectionAddress != *Pattern) // If Mask == 'x' we must have the same byte as Pattern in SectionBase
+            {
+                return true; // If the above isnt true pattern isnt here
+            }
         }
-        else
-        {
-            std::cout << "[!] Failed To Map: " << Path << " To Memory" << std::endl;
-        }
-    }
-
-    PeParser(uintptr_t Adder)
-    {
-        this->FileBytes = Adder;
+        return true;
     }
 
     uintptr_t RVA2FileOffset(uintptr_t RVA, PIMAGE_NT_HEADERS NtHeader)
@@ -44,6 +43,7 @@ public:
         {
             PIMAGE_SECTION_HEADER SectionHeader = IMAGE_FIRST_SECTION(NtHeader);
             int Sections = NtHeader->FileHeader.NumberOfSections;
+           
             for (int i = 0; i <= Sections; i++, SectionHeader++)
             {
                 if (SectionHeader->VirtualAddress <= RVA)
@@ -60,9 +60,11 @@ public:
         }
         else
         {
-            std::cout << "[!] Invalid Pointer" << std::endl;
+            ErrorCallBack("[!] Invalid Pointer");
         }
-        std::cout << "[!] Unable To Find RVA" << std::endl;
+
+        ErrorCallBack("[!] Unable To Find RVA");
+        
         return NULL;
     }
 
@@ -72,6 +74,7 @@ public:
         {
             PIMAGE_SECTION_HEADER SectionHeader = IMAGE_FIRST_SECTION(NtHeader);
             int Sections = NtHeader->FileHeader.NumberOfSections;
+        
             for (int i = 0; i <= Sections; i++, SectionHeader++)
             {
                 if (SectionHeader->PointerToRawData <= FileOffset)
@@ -80,7 +83,6 @@ public:
                     {
                         FileOffset -= SectionHeader->PointerToRawData;
                         FileOffset += SectionHeader->VirtualAddress;
-                        //std::cout << "Found RVA In Section: [" << i << "/" << Sections << "] " << SectionHeader->Name << std::endl;
                         return FileOffset;
                     }
                 }
@@ -88,15 +90,54 @@ public:
         }
         else
         {
-            std::cout << "[!] Invalid Pointer" << std::endl;
+            ErrorCallBack("[!] Invalid Pointer");
         }
-        std::cout << "[!] Unable To Find RVA" << std::endl;
+
+        ErrorCallBack("[!] Unable To Find RVA");
+ 
         return NULL;
+    }
+
+public:
+
+    PIMAGE_DOS_HEADER DosHeader = NULL;
+    PIMAGE_NT_HEADERS NtHeader = NULL;
+    PIMAGE_SECTION_HEADER SectionHeader = NULL;
+    uintptr_t FileBytes = 0;
+    DWORD FileSz = 0;
+
+    PeParser()
+    {
+
+    }
+
+    PeParser(std::string Path, void(*ErrorCallBack)(std::string) = LogError)
+    {
+        this->ErrorCallBack = ErrorCallBack;
+
+        if (this->MapFileToMemory(Path, false, true))
+        {
+            std::cout << "Successfully Mapped: " << Path << " To Memory" << std::endl;
+        }
+        else
+        {
+            ErrorCallBack("[!] Failed To Map: " + Path + " To Memory");
+        }
+    }
+
+    PeParser(uintptr_t Adder)
+    {
+        this->FileBytes = Adder;
+    }
+
+    void SetErrorCallBack(void (*CallBackPointer)(std::string))
+    {
+        this->ErrorCallBack = CallBackPointer;
     }
 
     void CloseHandles()
     {
-        if (this->IsFile == true)
+        if (this->IsFile == true && this->IsFile)
         {
             if (this->FileBytes)
             {
@@ -119,13 +160,16 @@ public:
     bool MapFileToMemory(std::string Path, bool LogSuccess = false, bool LogError = true)
     {
         this->FileHnd = CreateFileA(Path.c_str(), GENERIC_WRITE | GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+       
         if (FileHnd == INVALID_HANDLE_VALUE)
         {
             if (LogError)
             {
-                std::cout << "[!] Unable To Open: " << Path << " GetLastError(): " << GetLastError() << std::endl;
+                ErrorCallBack("[!] Unable To Open: " + Path + " GetLastError(): " + std::to_string(GetLastError()));      
             }
+           
             CloseHandle(this->FileHnd);
+
             return false;
         }
 
@@ -140,9 +184,11 @@ public:
         {
             if (!LogError)
             {
-                std::cout << "[!] Failed To Get File Size: GetLastError(): " << GetLastError() << std::endl;
+                ErrorCallBack("[!] Failed To Get File Size Error: " + GetLastError());
             }
+
             CloseHandle(this->FileHnd);
+          
             return false;
         }
 
@@ -156,7 +202,7 @@ public:
         if (this->FileMapHandle == INVALID_HANDLE_VALUE)
         {
             if (LogError)
-                std::cout << "[!] Unable To Create File Mapping: " << " GetLastError(): " << GetLastError() << std::endl;
+                ErrorCallBack("[!] Unable To Create File Mapping Error: " + GetLastError());
 
             this->CloseHandles();
 
@@ -175,7 +221,7 @@ public:
         if (!this->FileBytes)
         {
             if (LogError)
-                std::cout << "[!] Failed To Map View Of File: GetLastError():" << GetLastError() << std::endl;
+                ErrorCallBack("[!] Failed To Map View Of File Error: " + GetLastError());
 
             this->CloseHandles();
 
@@ -188,6 +234,7 @@ public:
         }
 
         this->IsFile = true;
+       
         return true;
     }
 
@@ -195,15 +242,19 @@ public:
     {
         if (!this->FileBytes)
         {
-            std::cout << "[!] Failed To Init Headers" << std::endl;
+            ErrorCallBack("[!] Failed To Init Headers");
             return false;
         }
+
         this->DosHeader = (PIMAGE_DOS_HEADER)this->FileBytes;
         this->NtHeader = (PIMAGE_NT_HEADERS)((BYTE*)(this->FileBytes + DosHeader->e_lfanew));
+
         if (DosHeader->e_magic != IMAGE_DOS_SIGNATURE && NtHeader->Signature != IMAGE_NT_SIGNATURE)
         {
-            std::cout << "[!] Not A Valid PE File" << std::endl;
+            ErrorCallBack("[!] Not A Valid PE File");
+
             this->CloseHandles();
+
             return false;
         }
         else
@@ -218,7 +269,7 @@ public:
     {
         if (!SectionHeader)
         {
-            std::cout << "[!] Invalid Section Header" << std::endl;
+            ErrorCallBack("[!] Invalid Section Header");
             return 0;
         }
 
@@ -229,7 +280,7 @@ public:
     {
         if (!this->NtHeader)
         {
-            std::cout << "[!] NtHeaders Must Be Initialized Before Calling GetOptionalDataDirectoryRVA()" << std::endl;
+            ErrorCallBack("[!] NtHeaders Must Be Initialized Before Calling GetOptionalDataDirectoryRVA()");
             return NULL;
         }
 
@@ -237,7 +288,7 @@ public:
             return this->NtHeader->OptionalHeader.DataDirectory[DataType].VirtualAddress;
         else
         {
-            std::cout << "[!] Failed To Get Data Directory " << std::endl;
+            ErrorCallBack("[!] Failed To Get Data Directory: " + DataType);
             return NULL;
         }
     }
@@ -246,13 +297,15 @@ public:
     {
         if (!ImportRVA)
         {
-            std::cout << "[!] Invalid Pointer" << std::endl;
+            ErrorCallBack("[!] Invalid Pointer");
             return NULL;
         }
+
         uintptr_t Offset = RVA2FileOffset(ImportRVA, this->NtHeader);
+
         if (!Offset)
         {
-            std::cout << "[!] Failed To Get Import Descriptor" << std::endl;
+            ErrorCallBack("[!] Failed To Get Import Descriptor");
             return NULL;
         }
         return ((PIMAGE_IMPORT_DESCRIPTOR)((uintptr_t)this->FileBytes + Offset));
@@ -265,7 +318,7 @@ public:
 
         if (!PImport || PImport->Name == NULL)
         {
-            std::cout << "[!] Failed To Instantiate Import Descriptor" << std::endl;
+            ErrorCallBack("[!] Failed To Instantiate Import Descriptor");
             return NULL;
         }
 
@@ -284,10 +337,12 @@ public:
     {
         if (!Dll)
         {
-            std::cout << "[!] Invalid Import Descriptor Passed To: GetImportINTThunkData" << std::endl;
+            ErrorCallBack("[!] Invalid Import Descriptor Passed To: GetImportINTThunkData");
             return NULL;
         }
+
         uintptr_t Offset = RVA2FileOffset(Dll->OriginalFirstThunk, this->NtHeader);
+
         return (PIMAGE_THUNK_DATA)((uintptr_t)this->FileBytes + Offset);
     }
 
@@ -295,10 +350,12 @@ public:
     {
         if (!Dll)
         {
-            std::cout << "[!] Invalid Import Descriptor Passed To: GetImportINTThunkData" << std::endl;
+            ErrorCallBack("[!] Invalid Import Descriptor Passed To: GetImportINTThunkData");
             return NULL;
         }
+
         uintptr_t Offset = RVA2FileOffset(Dll->FirstThunk, this->NtHeader);
+
         return (PIMAGE_THUNK_DATA)((uintptr_t)this->FileBytes + Offset);
     }
 
@@ -306,7 +363,7 @@ public:
     {
         if (!INTEntry)
         {
-            std::cout << "[!] Invalid Thunk Data Passed To: GetImageINTFromThunk" << std::endl;
+            ErrorCallBack("[!] Invalid Thunk Data Passed To: GetImageINTFromThunk");
             return NULL;
         }
 
@@ -314,7 +371,7 @@ public:
 
         if ((!Offset) || (INTEntry->u1.Ordinal & IMAGE_ORDINAL_FLAG))
         {
-            std::cout << "[!] Failed To Resolve Function Name" << std::endl;
+            ErrorCallBack("[!] Failed To Resolve Function Name");
             return NULL;
         }
 
@@ -325,7 +382,7 @@ public:
     {
         if (!PImportDescriptor)
         {
-            std::cout << "[!] Invalid Import Descriptor Passed To: GetImportNameFromDescriptor" << std::endl;
+            ErrorCallBack("[!] Invalid Import Descriptor Passed To : GetImportNameFromDescriptor");
             return "";
         }
 
@@ -333,7 +390,7 @@ public:
 
         if (!NameOffset)
         {
-            std::cout << "[!] Failed To Get Offset Of Dll Name" << std::endl;
+            ErrorCallBack("[!] Failed To Get Offset Of Dll Name");
         }
         return (char*)(this->FileBytes + NameOffset);
     }
@@ -351,6 +408,7 @@ public:
             {
                 FirstIATEntry++;
                 FirstINTEntry++;
+
                 continue;
             }
 
@@ -358,6 +416,7 @@ public:
             {
                 FirstIATEntry++;
                 FirstINTEntry++;
+
                 continue;
             }
 
@@ -385,7 +444,7 @@ public:
     {
         if (!this->NtHeader)
         {
-            std::cout << "[!] NtHeader Not Initialized" << std::endl;
+            ErrorCallBack("[!] NtHeader Not Initialized");
             return NULL;
         }
 
@@ -394,11 +453,13 @@ public:
         for (int i = 0; i < this->NtHeader->FileHeader.NumberOfSections; this->SectionHeader++, i++)
         {
             std::string SecName = PSTR(this->SectionHeader->Name);
+
             if (SecName == SectionName)
             {
                 return this->SectionHeader;
             }
         }
+
         return NULL;
     }
 
@@ -406,7 +467,7 @@ public:
     {
         if (!this->NtHeader)
         {
-            std::cout << "[!] NtHeader Not Initialized" << std::endl;
+            ErrorCallBack("[!] NtHeader Not Initialized");
         }
 
         #pragma warning(disable : 6011)
@@ -418,6 +479,7 @@ public:
         {
             std::cout << SectionHeader->Name << ", ";
         }
+
         std::cout << std::endl;
     }
 
@@ -430,6 +492,7 @@ public:
             if ((FirstINTEntry->u1.Ordinal & IMAGE_ORDINAL_FLAG))
             {
                 FirstINTEntry++;
+              
                 continue;
             }
 
@@ -438,10 +501,12 @@ public:
             if (!PImport)
             {
                 FirstINTEntry++;
+               
                 continue;
             }
 
             std::cout << "        Imported Function: [" << PImport->Hint << "] " << PSTR(PImport->Name) << " (0x" << std::hex << (uintptr_t)(FirstINTEntry->u1.Function) << ")" << std::endl;
+           
             FirstINTEntry++;
         }
     }
@@ -449,9 +514,10 @@ public:
     void PrintAllDllImports(uintptr_t ImportRVA, bool PrintFunctionNames = true)
     {
         PIMAGE_IMPORT_DESCRIPTOR PImportDescriptor = this->GetImportDescriptor(ImportRVA);
+      
         if (!PImportDescriptor)
         {
-            std::cout << "[!] Failed To Instantiate Import Descriptor" << std::endl;
+            ErrorCallBack("[!] Failed To Instantiate Import Descriptor");
             return;
         }
 
@@ -469,6 +535,7 @@ public:
     void ScanImports(std::vector<std::string> ModulesToScan, std::vector<std::string> FunctionsToScan, uintptr_t ImportRVA)
     {
         PIMAGE_IMPORT_DESCRIPTOR ImportDescriptor = this->GetImportDescriptor(ImportRVA);
+
         while (ImportDescriptor->Name != NULL)
         {
             std::string ModName = this->GetImportNameFromDescriptor(ImportDescriptor);
@@ -560,7 +627,7 @@ public:
     {
         if (!SectionHead)
         {
-            std::cout << "[!] Invalid Section Header Passed" << std::endl;
+            ErrorCallBack("[!] Invalid Section Header Passed");
             return;
         }
 
@@ -570,7 +637,7 @@ public:
 
         if (!SectionBase || !SectionLength)
         {
-            std::cout << "[!] Invalid Section Header Passed" << std::endl;
+            ErrorCallBack("[!] Invalid Section Header Passed");
             return;
         }
 
@@ -605,6 +672,7 @@ public:
                 return (uintptr_t)Addr;
             }
         }
+
         return 0;
     }
 
@@ -639,29 +707,8 @@ public:
             }
         }
 
-        std::cout << "[!] Failed To Find Pattern" << std::endl;
+        ErrorCallBack("[!] Failed To Find Pattern");
+
         return 0;
-    }
-
-    PIMAGE_DOS_HEADER DosHeader = NULL;
-    PIMAGE_NT_HEADERS NtHeader = NULL;
-    PIMAGE_SECTION_HEADER SectionHeader = NULL;
-    uintptr_t FileBytes = 0;
-    DWORD FileSz = 0;
-private:
-    HANDLE FileHnd = INVALID_HANDLE_VALUE;
-    HANDLE FileMapHandle = INVALID_HANDLE_VALUE;
-    bool IsFile = false;
-
-    bool CheckPattern(PCHAR SectionAddress, PCHAR Pattern, PCHAR Mask)
-    {
-        for (; *Mask != 0; ++SectionAddress, ++Pattern, ++Mask) // Iterate through SectionBase bytes && Pttern Characters && Mask Characters
-        {
-            if (*Mask == 'x' && *SectionAddress != *Pattern) // If Mask == 'x' we must have the same byte as Pattern in SectionBase
-            {
-                return true; // If the above isnt true pattern isnt here
-            }
-        }
-        return true;
     }
 };

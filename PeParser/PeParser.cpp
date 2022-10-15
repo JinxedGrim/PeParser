@@ -1,5 +1,10 @@
 #include "PeParser.h"
 
+void CustomErrorCallBack(std::string Message)
+{
+    MessageBoxA(0, Message.c_str(), "CallBack", MB_OK);
+}
+
 int main()
 {
     system("Title PE Parser");
@@ -12,7 +17,7 @@ int main()
 
     //std::getline(std::cin, Path);
 
-    PeParser PeParse = PeParser(Path);
+    PeParser PeParse = PeParser(Path, CustomErrorCallBack);
 
     if (PeParse.InitHeaders())
     {
@@ -57,7 +62,7 @@ int main()
 
     uintptr_t Addr = PeParse.FindPatternImage(Pattern, Mask);
 
-    std::cout << "\n Address Of Pattern: 0x" << std::hex << Addr - PeParse.FileBytes << std::endl;
+    std::cout << "\nAddress Of Pattern: 0x" << std::hex << Addr - PeParse.FileBytes << std::endl;
 
     PeParse.CloseHandles();
     system("pause");
