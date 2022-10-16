@@ -62,9 +62,10 @@ int main()
 
     uintptr_t Addr = PeParse.FindPatternImage(Pattern, Mask);
 
-    std::cout << "\nAddress Of Pattern: 0x" << std::hex << Addr - PeParse.FileBytes << std::endl;
+    std::cout << "\nAddress Of Pattern: 0x" << std::hex << Addr - PeParse.PeAddress << std::endl;
 
-    PeParse.CloseHandles();
+    PeParse.UnmapFileFromMemory();
+
     system("pause");
     return 0;
 }

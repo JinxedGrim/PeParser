@@ -103,14 +103,16 @@ public:
     PIMAGE_DOS_HEADER DosHeader = NULL;
     PIMAGE_NT_HEADERS NtHeader = NULL;
     PIMAGE_SECTION_HEADER SectionHeader = NULL;
-    uintptr_t FileBytes = 0;
-    DWORD FileSz = 0;
+    uintptr_t PeAddress = 0;
 
     PeParser()
     {
 
     }
 
+    // Functionality: Calls MapFileToMemory and SetErrorCallBack
+    // Parameters: Path (std::string), <optional>ErrorCallBack (void)(*)(std::string)
+    // Other: If no callback is specified errors are logged to the console window
     PeParser(std::string Path, void(*ErrorCallBack)(std::string) = LogError)
     {
         this->ErrorCallBack = ErrorCallBack;
@@ -125,43 +127,37 @@ public:
         }
     }
 
-    PeParser(uintptr_t Adder)
+    // Functionality: Initializes PeAddress and sets ErrorCallBack 
+    // Parameters: Path (std::string), <optional>ErrorCallBack (void)(*)(std::string)
+    // Other: If no callback is specified errors are logged to the console window
+    PeParser(uintptr_t Adder, void(*ErrorCallBack)(std::string) = LogError)
     {
-        this->FileBytes = Adder;
+        this->PeAddress = Adder;
+        this->IsFile = false;
+        this->SetErrorCallBack(ErrorCallBack);
     }
 
+    ~PeParser()
+    {
+        if (this->IsFile)
+            this->UnmapFileFromMemory();
+    }
+
+    // Functionality: Initializes the ErrorCallBack to use
+    // Parameters: Pointer a callback of type void (*)(std::string)
     void SetErrorCallBack(void (*CallBackPointer)(std::string))
     {
         this->ErrorCallBack = CallBackPointer;
     }
 
-    void CloseHandles()
-    {
-        if (this->IsFile == true && this->IsFile)
-        {
-            if (this->FileBytes)
-            {
-                FlushViewOfFile((LPBYTE)this->FileBytes, 0);
-                UnmapViewOfFile((LPBYTE)this->FileBytes);
-            }
-
-            if (this->FileHnd != INVALID_HANDLE_VALUE)
-            {
-                SetFilePointer(this->FileHnd, this->FileSz, NULL, FILE_BEGIN);
-                SetEndOfFile(this->FileHnd);
-                CloseHandle(this->FileHnd);
-            }
-
-            if (this->FileMapHandle)
-                CloseHandle(this->FileMapHandle);
-        }
-    }
-
+    // Functionality: Maps a file to memory
+    // Parameters: Path to file (std::string), <Optional>LogSuccess (bool), <optional>LogError (bool)
+    // Return: True if successful
     bool MapFileToMemory(std::string Path, bool LogSuccess = false, bool LogError = true)
     {
         this->FileHnd = CreateFileA(Path.c_str(), GENERIC_WRITE | GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
        
-        if (FileHnd == INVALID_HANDLE_VALUE)
+        if (this->FileHnd == INVALID_HANDLE_VALUE)
         {
             if (LogError)
             {
@@ -178,16 +174,19 @@ public:
             std::cout << "Successfully opened handle to File: " << Path << " : " << FileHnd << std::endl;
         }
 
-        this->FileSz = GetFileSize(this->FileHnd, 0);
+        DWORD FileSz = GetFileSize(this->FileHnd, 0);
 
-        if (!this->FileSz)
+        if (!FileSz)
         {
             if (!LogError)
             {
                 ErrorCallBack("[!] Failed To Get File Size Error: " + GetLastError());
             }
 
-            CloseHandle(this->FileHnd);
+            if (!CloseHandle(this->FileHnd))
+            {
+                ErrorCallBack("[!] Failed To Close Handle");
+            }
           
             return false;
         }
@@ -197,14 +196,18 @@ public:
             std::cout << "File Size: " << FileSz << " Bytes" << std::endl;
         }
 
-        this->FileMapHandle = CreateFileMapping(this->FileHnd, NULL, PAGE_READWRITE, 0, this->FileSz, NULL);
+        this->FileMapHandle = CreateFileMapping(this->FileHnd, NULL, PAGE_READWRITE, 0, FileSz, NULL);
 
         if (this->FileMapHandle == INVALID_HANDLE_VALUE)
         {
             if (LogError)
                 ErrorCallBack("[!] Unable To Create File Mapping Error: " + GetLastError());
 
-            this->CloseHandles();
+            if (!CloseHandle(this->FileHnd))
+                ErrorCallBack("[!] Failed To Close Handle");
+
+            if (!CloseHandle(this->FileMapHandle))
+                ErrorCallBack("[!] Failed To Close Handle");
 
             return false;
         }
@@ -215,15 +218,24 @@ public:
         }
 
         #pragma warning(disable : 6387) // value is checked before function call yet warning still appears
-        this->FileBytes = (uintptr_t)MapViewOfFile(this->FileMapHandle, FILE_MAP_ALL_ACCESS, NULL, NULL, this->FileSz);
+        this->PeAddress = (uintptr_t)MapViewOfFile(this->FileMapHandle, FILE_MAP_ALL_ACCESS, NULL, NULL, FileSz);
         #pragma warning(default : 6387)
 
-        if (!this->FileBytes)
+        if (!this->PeAddress)
         {
             if (LogError)
                 ErrorCallBack("[!] Failed To Map View Of File Error: " + GetLastError());
 
-            this->CloseHandles();
+            if(!UnmapViewOfFile((LPCVOID)this->PeAddress))
+                ErrorCallBack("[!] Failed To Unmap File");
+
+            if(!CloseHandle(this->FileHnd))
+                ErrorCallBack("[!] Failed To Close Handle");
+
+            if (!CloseHandle(this->FileMapHandle))
+            {
+                ErrorCallBack("[!] Failed To Close Handle");
+            }
 
             return false;
         }
@@ -238,22 +250,52 @@ public:
         return true;
     }
 
-    bool InitHeaders() // returns true if DOS and NT headers are initialized and PE is valid
+    // Functionality: Unmaps file from memory and closes handles
+    // Return: True if successful (also return true if a file wasnt mapped)
+    bool UnmapFileFromMemory()
     {
-        if (!this->FileBytes)
+        if (!this->IsFile)
+            return true;
+
+        if(!UnmapViewOfFile((LPCVOID)this->PeAddress))
+        {
+            ErrorCallBack("[!] Failed To Unmap File");
+            return false;
+        }
+
+        if (!CloseHandle(this->FileMapHandle))
+        {
+            ErrorCallBack("[!] Failed Close Hnadle");
+            return false;
+        }
+        if (!CloseHandle(this->FileHnd))
+        {
+            ErrorCallBack("[!] Failed Close Hnadle");
+            return false;
+        }
+
+        return true;
+    }
+
+    // Functionality: Initializes NT and DOS headers.
+    // Return: True if successful and Pe is valid.
+    // Other: Unmaps File from memory.
+    bool InitHeaders()
+    {
+        if (!this->PeAddress)
         {
             ErrorCallBack("[!] Failed To Init Headers");
             return false;
         }
 
-        this->DosHeader = (PIMAGE_DOS_HEADER)this->FileBytes;
-        this->NtHeader = (PIMAGE_NT_HEADERS)((BYTE*)(this->FileBytes + DosHeader->e_lfanew));
+        this->DosHeader = (PIMAGE_DOS_HEADER)this->PeAddress;
+        this->NtHeader = (PIMAGE_NT_HEADERS)((BYTE*)(this->PeAddress + DosHeader->e_lfanew));
 
         if (DosHeader->e_magic != IMAGE_DOS_SIGNATURE && NtHeader->Signature != IMAGE_NT_SIGNATURE)
         {
             ErrorCallBack("[!] Not A Valid PE File");
 
-            this->CloseHandles();
+            this->UnmapFileFromMemory();
 
             return false;
         }
@@ -265,6 +307,9 @@ public:
         return false;
     }
 
+    // Functionality: Calculates a section's base address.
+    // Parameters: Pointer to a section header (PIMAGE_SECTION_HEADER).
+    // Return: A pointer to the sections base.
     uintptr_t GetSectionBase(PIMAGE_SECTION_HEADER SectionHeader)
     {
         if (!SectionHeader)
@@ -273,9 +318,12 @@ public:
             return 0;
         }
 
-        return (uintptr_t)(this->FileBytes + SectionHeader->VirtualAddress);
+        return (uintptr_t)(this->PeAddress + SectionHeader->VirtualAddress);
     }
 
+    // Functionality: Calculates a pointer to a image data directory.
+    // Parameters: Data type (IMAGE_DIRECTORY_ENTRY).
+    // Return: A pointer to the data directory.
     uintptr_t GetOptionalDataDirectoryRVA(int DataType)
     {
         if (!this->NtHeader)
@@ -293,6 +341,9 @@ public:
         }
     }
 
+    // Functionality: Calculates a pointer to the first import descriptor in the import list.
+    // Parameters: Pointer to the import directory.
+    // Return: A pointer to the first import descriptor in the import list.
     PIMAGE_IMPORT_DESCRIPTOR GetImportDescriptor(uintptr_t ImportRVA)
     {
         if (!ImportRVA)
@@ -308,7 +359,7 @@ public:
             ErrorCallBack("[!] Failed To Get Import Descriptor");
             return NULL;
         }
-        return ((PIMAGE_IMPORT_DESCRIPTOR)((uintptr_t)this->FileBytes + Offset));
+        return ((PIMAGE_IMPORT_DESCRIPTOR)((uintptr_t)this->PeAddress + Offset));
     }
 
     PIMAGE_IMPORT_DESCRIPTOR GetImportDescriptorByName(std::string DllName, uintptr_t ImportRVA)
@@ -343,7 +394,7 @@ public:
 
         uintptr_t Offset = RVA2FileOffset(Dll->OriginalFirstThunk, this->NtHeader);
 
-        return (PIMAGE_THUNK_DATA)((uintptr_t)this->FileBytes + Offset);
+        return (PIMAGE_THUNK_DATA)((uintptr_t)this->PeAddress + Offset);
     }
 
     PIMAGE_THUNK_DATA GetImportIATThunkData(PIMAGE_IMPORT_DESCRIPTOR Dll)
@@ -356,7 +407,7 @@ public:
 
         uintptr_t Offset = RVA2FileOffset(Dll->FirstThunk, this->NtHeader);
 
-        return (PIMAGE_THUNK_DATA)((uintptr_t)this->FileBytes + Offset);
+        return (PIMAGE_THUNK_DATA)((uintptr_t)this->PeAddress + Offset);
     }
 
     PIMAGE_IMPORT_BY_NAME GetImageINTFromThunk(PIMAGE_THUNK_DATA INTEntry)
@@ -375,7 +426,7 @@ public:
             return NULL;
         }
 
-        return (PIMAGE_IMPORT_BY_NAME)((uintptr_t)this->FileBytes + Offset);
+        return (PIMAGE_IMPORT_BY_NAME)((uintptr_t)this->PeAddress + Offset);
     }
 
     std::string GetImportNameFromDescriptor(PIMAGE_IMPORT_DESCRIPTOR PImportDescriptor)
@@ -392,7 +443,7 @@ public:
         {
             ErrorCallBack("[!] Failed To Get Offset Of Dll Name");
         }
-        return (char*)(this->FileBytes + NameOffset);
+        return (char*)(this->PeAddress + NameOffset);
     }
 
     PIMAGE_THUNK_DATA GetFunctionThunkByName(PIMAGE_IMPORT_DESCRIPTOR Dll, std::string Function, bool Original = true)
@@ -643,13 +694,13 @@ public:
 
         std::cout << "Reading " << std::dec << SectionLength << " Bytes" << std::endl << std::endl;
 
-        printf("0x%IX: ", SectionBase - this->FileBytes);
+        printf("0x%IX: ", SectionBase - this->PeAddress);
 
         for (uintptr_t i = 0; i < SectionLength; i++, LineCount++, SectionBase += 1)
         {
             if (LineCount == 32)
             {
-                printf("\n0x%IX: ", SectionBase - this->FileBytes);
+                printf("\n0x%IX: ", SectionBase - this->PeAddress);
                 LineCount = 0;
             }
 
@@ -685,7 +736,7 @@ public:
 
         if (TextSection)
         {
-            Result = FindPatternInSection((PBYTE)(this->FileBytes + TextSection->VirtualAddress), TextSection->Misc.VirtualSize, Pattern, Mask);
+            Result = FindPatternInSection((PBYTE)(this->PeAddress + TextSection->VirtualAddress), TextSection->Misc.VirtualSize, Pattern, Mask);
 
             if (Result)
             {
@@ -699,7 +750,7 @@ public:
         {
             std::cout << "Scanning Section: " << PageSection << std::endl;
 
-            Result = FindPatternInSection((PBYTE)(this->FileBytes + PageSection->VirtualAddress), PageSection->Misc.VirtualSize, Pattern, Mask);
+            Result = FindPatternInSection((PBYTE)(this->PeAddress + PageSection->VirtualAddress), PageSection->Misc.VirtualSize, Pattern, Mask);
 
             if (Result)
             {
