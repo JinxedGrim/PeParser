@@ -26,7 +26,7 @@ private:
         {
             if (*Mask == 'x' && *SectionAddress != *Pattern) // If Mask == 'x' we must have the same byte as Pattern in SectionBase
             {
-                return true; // If the above isnt true pattern isnt here
+                return false; // If the above isnt true pattern isnt here
             }
         }
         return true;

@@ -13,10 +13,6 @@ int main()
     uintptr_t IMPORTVA = 0;
     std::string Path = "C:\\Users\\griff\\Desktop\\win32k.sys";
 
-    //std::cout << "Enter PE Path: ";
-
-    //std::getline(std::cin, Path);
-
     PeParser PeParse = PeParser(Path, CustomErrorCallBack);
 
     if (PeParse.InitHeaders())
@@ -43,7 +39,7 @@ int main()
         return 0;
     }
 
-    std::cout << "Import Directory was found at RVA: " << std::hex << IMPORTVA << std::endl << "Imports: " << std::endl << "{" << std::endl;
+    std::cout << "Import Directory was found at RVA: 0x" << std::hex << IMPORTVA << std::endl << "Imports: " << std::endl << "{" << std::endl;
 
     PeParse.PrintAllDllImports(IMPORTVA, true);
 
@@ -57,14 +53,12 @@ int main()
 
     PeParse.PrintSectionBytes(PeParse.GetSection(".text"));
 
-    char Pattern[] = "\xEC\x28\x48\x8B\x05\xED\x28\x06\x00\x48\x85\xC0\x74\x06";
-    char Mask[] = "xxxxxxxxxxxxxxxx";
+    char Pattern[] = "\x82\xEC\x28\x48\x8B\x05\xED\x28\x06\x00\x48\x85\xC0\x74\x06";
+    char Mask[] = "?xxxxxxxxxxxxx";
 
     uintptr_t Addr = PeParse.FindPatternImage(Pattern, Mask);
 
     std::cout << "\nAddress Of Pattern: 0x" << std::hex << Addr - PeParse.PeAddress << std::endl;
-
-    PeParse.UnmapFileFromMemory();
 
     system("pause");
     return 0;
